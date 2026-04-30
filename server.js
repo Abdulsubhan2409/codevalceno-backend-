@@ -6,7 +6,6 @@ const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
 const app = express();
-
 app.use(cors({ origin: "*", credentials: true }));
 app.use(express.json());
 
@@ -45,11 +44,20 @@ async function setupDatabase() {
     if (rows.length === 0) {
       const hash = await bcrypt.hash("admin123", 10);
       await conn.query("INSERT INTO admins (email, password_hash) VALUES (?, ?)", ["admin@codevalceno.com", hash]);
-      console.log("✅ Default admin created");
     }
     console.log("✅ Database ready");
   } finally { conn.release(); }
 }
+
+// Run setup on first request
+let dbReady = false;
+app.use(async (req, res, next) => {
+  if (!dbReady) {
+    try { await setupDatabase(); dbReady = true; } 
+    catch (err) { console.error("DB setup error:", err.message); }
+  }
+  next();
+});
 
 // AUTH
 app.post("/api/auth/login", async (req, res) => {
@@ -120,9 +128,12 @@ app.get("/api/stats", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-const PORT = process.env.PORT || 4000;
-setupDatabase()
-  .then(() => app.listen(PORT, () => console.log(`🚀 API running on port ${PORT}`)))
-  .catch((err) => { console.error("❌ DB connection failed:", err.message); process.exit(1); });
+// For local development
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 4000;
+  setupDatabase()
+    .then(() => app.listen(PORT, () => console.log(`🚀 API running on port ${PORT}`)))
+    .catch((err) => console.error("❌ DB error:", err.message));
+}
 
 module.exports = app;
