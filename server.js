@@ -53,13 +53,31 @@ async function setupDatabase() {
 let dbReady = false;
 app.use(async (req, res, next) => {
   if (!dbReady) {
-    try { await setupDatabase(); dbReady = true; } 
+    try { await setupDatabase(); dbReady = true; }
     catch (err) { console.error("DB setup error:", err.message); }
   }
   next();
 });
 
-// AUTH
+// ─── HOME ROUTE (fixes 404 on /) ──────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.json({
+    message: "CodeValceno API is running ✅",
+    version: "1.0.0",
+    status: "healthy",
+    endpoints: [
+      "POST /api/auth/login",
+      "GET  /api/projects",
+      "GET  /api/messages",
+      "GET  /api/team",
+      "GET  /api/blog",
+      "GET  /api/stats",
+      "GET  /api/pages",
+    ],
+  });
+});
+
+// ─── AUTH ──────────────────────────────────────────────────────────────────
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
@@ -68,18 +86,22 @@ app.post("/api/auth/login", async (req, res) => {
     if (rows.length === 0) return res.status(401).json({ error: "Invalid credentials" });
     const valid = await bcrypt.compare(password, rows[0].password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
-    const token = jwt.sign({ id: rows[0].id, email: rows[0].email }, process.env.JWT_SECRET || "secret", { expiresIn: "7d" });
+    const token = jwt.sign(
+      { id: rows[0].id, email: rows[0].email },
+      process.env.JWT_SECRET || "secret",
+      { expiresIn: "1h" } // ← changed from 7d to 1h to match frontend session
+    );
     res.json({ token, email: rows[0].email });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PROJECTS
+// ─── PROJECTS ──────────────────────────────────────────────────────────────
 app.get("/api/projects", auth, async (req, res) => { try { const [rows] = await db.query("SELECT * FROM projects ORDER BY created_at DESC"); res.json(rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.post("/api/projects", auth, async (req, res) => { const { title, type, country, status, tech } = req.body; try { const [r] = await db.query("INSERT INTO projects (title, type, country, status, tech) VALUES (?, ?, ?, ?, ?)", [title, type, country, status || "In Progress", JSON.stringify(tech || [])]); res.status(201).json({ id: r.insertId }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put("/api/projects/:id", auth, async (req, res) => { const { title, type, country, status, tech } = req.body; try { await db.query("UPDATE projects SET title=?, type=?, country=?, status=?, tech=? WHERE id=?", [title, type, country, status, JSON.stringify(tech || []), req.params.id]); res.json({ message: "Updated" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.delete("/api/projects/:id", auth, async (req, res) => { try { await db.query("DELETE FROM projects WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 
-// MESSAGES
+// ─── MESSAGES ──────────────────────────────────────────────────────────────
 app.post("/api/messages", async (req, res) => {
   const { full_name, email, company, phone, project_type, budget_range, message } = req.body;
   if (!full_name || !email) return res.status(400).json({ error: "Name and email required" });
@@ -91,32 +113,38 @@ app.post("/api/messages/:id/reply", auth, async (req, res) => {
   const { replyText, toEmail, toName } = req.body;
   if (!replyText || !toEmail) return res.status(400).json({ error: "replyText and toEmail required" });
   try {
-    await mailer.sendMail({ from: `"CodeValceno" <${process.env.EMAIL_USER}>`, to: toEmail, subject: "Re: Your inquiry — CodeValceno", text: replyText, html: `<p>Hi ${toName || "there"},</p><p>${replyText.replace(/\n/g, "<br/>")}</p><p>— CodeValceno Team</p>` });
+    await mailer.sendMail({
+      from: `"CodeValceno" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: "Re: Your inquiry — CodeValceno",
+      text: replyText,
+      html: `<p>Hi ${toName || "there"},</p><p>${replyText.replace(/\n/g, "<br/>")}</p><p>— CodeValceno Team</p>`
+    });
     await db.query("UPDATE contact_submissions SET status=? WHERE id=?", ["replied", req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 app.delete("/api/messages/:id", auth, async (req, res) => { try { await db.query("DELETE FROM contact_submissions WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 
-// TEAM
+// ─── TEAM ──────────────────────────────────────────────────────────────────
 app.get("/api/team", auth, async (req, res) => { try { const [rows] = await db.query("SELECT * FROM team_members ORDER BY created_at DESC"); res.json(rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.post("/api/team", auth, async (req, res) => { const { name, role, email, status } = req.body; try { const [r] = await db.query("INSERT INTO team_members (name, role, email, status) VALUES (?, ?, ?, ?)", [name, role, email, status || "Active"]); res.status(201).json({ id: r.insertId }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put("/api/team/:id", auth, async (req, res) => { const { name, role, email, status } = req.body; try { await db.query("UPDATE team_members SET name=?, role=?, email=?, status=? WHERE id=?", [name, role, email, status, req.params.id]); res.json({ message: "Updated" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.delete("/api/team/:id", auth, async (req, res) => { try { await db.query("DELETE FROM team_members WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 
-// BLOG
+// ─── BLOG ──────────────────────────────────────────────────────────────────
 app.get("/api/blog", auth, async (req, res) => { try { const [rows] = await db.query("SELECT * FROM blog_posts ORDER BY created_at DESC"); res.json(rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.post("/api/blog", auth, async (req, res) => { const { title, content, status } = req.body; try { const [r] = await db.query("INSERT INTO blog_posts (title, content, status) VALUES (?, ?, ?)", [title, content || "", status || "Draft"]); res.status(201).json({ id: r.insertId }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put("/api/blog/:id", auth, async (req, res) => { const { title, content, status } = req.body; try { await db.query("UPDATE blog_posts SET title=?, content=?, status=? WHERE id=?", [title, content, status, req.params.id]); res.json({ message: "Updated" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.delete("/api/blog/:id", auth, async (req, res) => { try { await db.query("DELETE FROM blog_posts WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 
-// PAGES
+// ─── PAGES ──────────────────────────────────────────────────────────────────
 app.get("/api/pages", auth, async (req, res) => { try { const [rows] = await db.query("SELECT * FROM pages ORDER BY id ASC"); res.json(rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.post("/api/pages", auth, async (req, res) => { const { name, slug, content, status } = req.body; try { const [r] = await db.query("INSERT INTO pages (name, slug, content, status) VALUES (?, ?, ?, ?)", [name, slug, content || "", status || "Published"]); res.status(201).json({ id: r.insertId }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.put("/api/pages/:id", auth, async (req, res) => { const { name, slug, content, status } = req.body; try { await db.query("UPDATE pages SET name=?, slug=?, content=?, status=? WHERE id=?", [name, slug, content, status, req.params.id]); res.json({ message: "Updated" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.delete("/api/pages/:id", auth, async (req, res) => { try { await db.query("DELETE FROM pages WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 
-// STATS
+// ─── STATS ──────────────────────────────────────────────────────────────────
 app.get("/api/stats", auth, async (req, res) => {
   try {
     const [[{ projects }]] = await db.query("SELECT COUNT(*) as projects FROM projects");
@@ -128,7 +156,7 @@ app.get("/api/stats", auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// For local development
+// ─── LOCAL DEV ──────────────────────────────────────────────────────────────
 if (process.env.NODE_ENV !== "production") {
   const PORT = process.env.PORT || 4000;
   setupDatabase()
