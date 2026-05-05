@@ -102,10 +102,35 @@ app.put("/api/projects/:id", auth, async (req, res) => { const { title, type, co
 app.delete("/api/projects/:id", auth, async (req, res) => { try { await db.query("DELETE FROM projects WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); } catch (err) { res.status(500).json({ error: err.message }); } });
 
 // ─── MESSAGES ──────────────────────────────────────────────────────────────
+// ─── MESSAGES ──────────────────────────────────────────────────────────────
 app.post("/api/messages", async (req, res) => {
   const { full_name, email, company, phone, project_type, budget_range, message } = req.body;
   if (!full_name || !email) return res.status(400).json({ error: "Name and email required" });
-  try { await db.query("INSERT INTO contact_submissions (full_name, email, company, phone, project_type, budget_range, message) VALUES (?, ?, ?, ?, ?, ?, ?)", [full_name, email, company || "", phone || "", project_type || "", budget_range || "", message || ""]); res.status(201).json({ message: "Message received!" }); } catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    await db.query(
+      "INSERT INTO contact_submissions (full_name, email, company, phone, project_type, budget_range, message) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [full_name, email, company || "", phone || "", project_type || "", budget_range || "", message || ""]
+    );
+
+    // Auto-reply email to user
+    await mailer.sendMail({
+      from: `"CodeValceno" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Thank you for contacting CodeValceno! 💛",
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;">
+          <h2 style="color:#0f172a;">Hi ${full_name}! 👋</h2>
+          <p style="color:#475569;line-height:1.7;">
+            Thank you for reaching out to us! 💛<br/>
+            We'll review your message and get back to you shortly — stay tuned!
+          </p>
+          <p style="color:#94a3b8;font-size:13px;">— CodeValceno Team</p>
+        </div>
+      `
+    });
+
+    res.status(201).json({ message: "Message received!" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 app.get("/api/messages", auth, async (req, res) => { try { const [rows] = await db.query("SELECT * FROM contact_submissions ORDER BY created_at DESC"); res.json(rows); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.patch("/api/messages/:id/status", auth, async (req, res) => { const { status } = req.body; try { await db.query("UPDATE contact_submissions SET status=? WHERE id=?", [status, req.params.id]); res.json({ message: "Updated" }); } catch (err) { res.status(500).json({ error: err.message }); } });
